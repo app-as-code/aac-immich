@@ -1,0 +1,191 @@
+services:
+  # --- Main Application Service ---
+  aac-immich:
+    image: "ghcr.io/immich-app/immich-server:v3.3.5"
+    container_name: "aac-immich"
+    hostname: "immich"
+    restart: "unless-stopped"
+
+
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Europe/Berlin"
+      IMMICH_VERSION: "release"
+      DB_HOSTNAME: "aac-immich-db"
+      REDIS_HOSTNAME: "aac-immich-redis"
+      DB_DATABASE_NAME: "immich"
+      DB_USERNAME: "postgres"
+      DB_PORT: "5432"
+      VIPS_NOVECTOR: "1"
+      IMMICH_IGNORE_MOUNT_CHECK_ERRORS: "true"
+      MACHINE_LEARNING_WORKERS: "2"
+      POSTGRES_DB: "immich"
+      POSTGRES_USER: "postgres"
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      DB_PASSWORD: "${DB_PASSWORD:?set DB_PASSWORD in .env (see .env.example)}"
+      HOMEPAGE_WIDGET_KEY: "${HOMEPAGE_WIDGET_KEY:?set HOMEPAGE_WIDGET_KEY in .env (see .env.example)}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}"
+    ports:
+      - "2283:2283/tcp"
+
+    volumes:
+      - "/export/docker/aac-immich/appdata:/data"
+      - "/mnt/homenas/netzlaufwerk-feser/Bibliothek/Bilder/Familien-Galerie:/mnt/familie"
+      - "/mnt/homenas/server/immich/library:/data/library"
+      - "/etc/localtime:/etc/localtime"
+      - "/mnt/homenas/server/immich/bilder-marvin:/mnt/bilder-marvin"
+
+    networks:
+      - exposed
+      - interconnect
+      - secured
+      - stack_internal
+
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.aac-immich.rule: "Host(`immich.example.com`) || Host(`fotos.example.com`)"
+      traefik.http.routers.aac-immich.entrypoints: "websecure"
+      traefik.http.routers.aac-immich.tls: "true"
+      traefik.http.routers.aac-immich.tls.certresolver: "ionos"
+      traefik.docker.network: "services-secured"
+      traefik.http.services.aac-immich.loadbalancer.server.port: "2283"
+      traefik.http.services.aac-immich.loadbalancer.server.scheme: "http"
+      auto-dns.createWildcard.aac-immich: "true"
+      auto-dns.customDNS.aac-immich: "true"
+      auto-dns.customDOMAIN.aac-immich: "example.com"
+      auto-dns.customHost.aac-immich: "immich"
+      homepage.group: "Medien - Entertainment"
+      homepage.name: "Fotos"
+      homepage.href: "https://fotos.example.com"
+      homepage.icon: "immich.png"
+      homepage.description: "Self-hosted Photo Management"
+
+
+    depends_on:
+      aac-immich-machine-learning:
+        condition: service_started
+      aac-immich-db:
+        condition: service_healthy
+      aac-immich-redis:
+        condition: service_healthy
+
+
+  # --- Service Dependencies (Sidecars) ---
+  aac-immich-machine-learning:
+    image: "ghcr.io/immich-app/immich-machine-learning:release-cuda"
+    container_name: "aac-immich-machine-learning"
+    restart: "always"
+    
+
+    env_file:
+      - .env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Europe/Berlin"
+
+
+    volumes:
+      - "/export/docker/aac-immich/model-cache:/cache"
+
+    networks:
+      - stack_internal
+
+
+
+    security_opt:
+    - seccomp:unconfined
+    - apparmor:unconfined
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            count: all
+            capabilities:
+            - gpu
+            - compute
+            - compat32
+            - graphics
+            - utility
+            - video
+
+
+  aac-immich-db:
+    image: "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:32324a2f41df5de9efe1af166b7008c3f55646f8d0e00d9550c16c9822366b4a"
+    container_name: "aac-immich-db"
+    restart: "always"
+    
+
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: "immich"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}"
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Europe/Berlin"
+
+
+    volumes:
+      - "/export/docker/aac-immich/db:/var/lib/postgresql/data"
+
+    networks:
+      - stack_internal
+
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    shm_size: 128mb
+
+
+  aac-immich-redis:
+    image: "docker.io/valkey/valkey:8-bookworm@sha256:5b8f8c333bef895c925f56629d6ba90aea95a4f7391f62411e625267c600b19c"
+    container_name: "aac-immich-redis"
+    restart: "always"
+    
+
+    env_file:
+      - .env
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Europe/Berlin"
+
+
+    volumes:
+      - "/export/docker/aac-immich/redis:/data"
+
+    networks:
+      - stack_internal
+
+
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+
+
+networks:
+  secured:
+    name: "services-secured"
+    external: true
+  exposed:
+    name: "services-exposed"
+    external: true
+  interconnect:
+    name: "docker-default"
+    external: true
+  stack_internal:
+    name: "aac-immich_stack_internal"
+    driver: "bridge"
+

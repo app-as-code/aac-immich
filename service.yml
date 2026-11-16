@@ -1,0 +1,200 @@
+service:
+  name: aac-immich
+  friendly_name: Fotos
+  image_repo: ghcr.io/immich-app/immich-server
+  image_tag: v3.3.5
+  description: Self-hosted Photo Management
+  icon: immich.png
+  category: Medien - Entertainment
+  stage: prod
+  hostname: immich
+ports:
+- name: web
+  port: 2283
+  external_port: 2283
+  protocol: TCP
+config:
+  domain_name: example.com
+  public_domain_name: example.com
+  public_hostname: fotos
+  generate_hostname: false
+  integrations:
+    homepage:
+      enabled: true
+    autodns:
+      enabled: true
+      create_wildcard: true
+    traefik:
+      enabled: true
+      cert_resolver: ionos
+      entrypoint: websecure
+      internet_facing: true
+  schema_version: 2
+stage_overrides:
+  prod:
+    config:
+      generate_hostname: false
+    service:
+      hostname: immich
+secrets:
+  DB_PASSWORD: CHANGE_ME
+  HOMEPAGE_WIDGET_KEY: CHANGE_ME
+  POSTGRES_PASSWORD: CHANGE_ME
+volumes:
+  appdata:
+    description: Immich application configuration data
+  model-cache:
+    description: Data for machine-learning
+  db:
+    description: Data for database
+  redis:
+    description: Data for redis
+  local_time:
+    type: bind
+    source: /etc/localtime
+  netl_feser:
+    type: bind
+    source: /mnt/homenas/netzlaufwerk-feser/Bibliothek/Bilder/Familien-Galerie
+  immich_feser:
+    type: bind
+    source: /mnt/homenas/server/immich/library
+  immich_marvin:
+    type: bind
+    source: /mnt/homenas/server/immich/bilder-marvin
+deployment_strategy:
+  main:
+    enabled: true
+    target_stage: prod
+  dev:
+    enabled: false
+    target_stage: dev
+  test:
+    enabled: false
+    target_stage: test
+  ansible-dev:
+    enabled: false
+    target_stage: dev
+  iac-dev:
+    enabled: false
+    target_stage: dev
+  template-dev:
+    enabled: false
+    target_stage: dev
+deployments:
+  docker_compose:
+    restart_policy: unless-stopped
+    host_base_path: /export/docker
+    volumes:
+    - appdata:/data
+    - netl_feser:/mnt/familie
+    - immich_feser:/data/library
+    - local_time:/etc/localtime
+    - immich_marvin:/mnt/bilder-marvin
+    environment:
+      PUID: '{{ vars.PUID }}'
+      PGID: '{{ vars.PGID }}'
+      TZ: '{{ vars.TZ }}'
+      IMMICH_VERSION: '{{ vars.IMMICH_VERSION }}'
+      DB_HOSTNAME: '{{ vars.DB_HOSTNAME }}'
+      REDIS_HOSTNAME: '{{ vars.REDIS_HOSTNAME }}'
+      DB_DATABASE_NAME: '{{ vars.DB_DATABASE_NAME }}'
+      DB_USERNAME: '{{ vars.DB_USERNAME }}'
+      DB_PORT: '{{ vars.DB_PORT }}'
+      VIPS_NOVECTOR: '{{ vars.VIPS_NOVECTOR }}'
+      IMMICH_IGNORE_MOUNT_CHECK_ERRORS: '{{ vars.IMMICH_IGNORE_MOUNT_CHECK_ERRORS
+        }}'
+      MACHINE_LEARNING_WORKERS: '{{ vars.MACHINE_LEARNING_WORKERS }}'
+      POSTGRES_DB: '{{ vars.POSTGRES_DB }}'
+      POSTGRES_USER: '{{ vars.POSTGRES_USER }}'
+      POSTGRES_INITDB_ARGS: '{{ vars.POSTGRES_INITDB_ARGS }}'
+      DB_PASSWORD: '{{ secrets.DB_PASSWORD }}'
+      HOMEPAGE_WIDGET_KEY: '{{ secrets.HOMEPAGE_WIDGET_KEY }}'
+      POSTGRES_PASSWORD: '{{ secrets.POSTGRES_PASSWORD }}'
+dependencies:
+  machine-learning:
+    name: aac-immich-machine-learning
+    image_repo: ghcr.io/immich-app/immich-machine-learning
+    image_tag: release-cuda
+    restart_policy: always
+    security_opt:
+    - seccomp:unconfined
+    - apparmor:unconfined
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            count: all
+            capabilities:
+            - gpu
+            - compute
+            - compat32
+            - graphics
+            - utility
+            - video
+    volumes:
+      model-cache:
+        target: /cache
+        description: Persistent storage for model-cache
+    environment:
+      PUID: '{{ vars.PUID }}'
+      PGID: '{{ vars.PGID }}'
+      TZ: '{{ vars.TZ }}'
+  database:
+    name: aac-immich-db
+    image_repo: ghcr.io/immich-app/postgres
+    image_tag: 14-vectorchord0.4.3-pgvectors0.2.0@sha256:32324a2f41df5de9efe1af166b7008c3f55646f8d0e00d9550c16c9822366b4a
+    restart_policy: always
+    shm_size: 128mb
+    environment:
+      POSTGRES_DB: immich
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: '{{ secrets.POSTGRES_PASSWORD }}'
+      POSTGRES_INITDB_ARGS: --data-checksums
+      PUID: '{{ vars.PUID }}'
+      PGID: '{{ vars.PGID }}'
+      TZ: '{{ vars.TZ }}'
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U postgres || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      db:
+        target: /var/lib/postgresql/data
+        description: Persistent storage for db
+  redis:
+    name: aac-immich-redis
+    image_repo: docker.io/valkey/valkey
+    image_tag: 8-bookworm@sha256:5b8f8c333bef895c925f56629d6ba90aea95a4f7391f62411e625267c600b19c
+    restart_policy: always
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - redis-cli ping || exit 1
+    volumes:
+      redis:
+        target: /data
+        description: Persistent storage for redis
+    environment:
+      PUID: '{{ vars.PUID }}'
+      PGID: '{{ vars.PGID }}'
+      TZ: '{{ vars.TZ }}'
+vars:
+  PUID: '1000'
+  PGID: '1000'
+  TZ: Europe/Berlin
+  IMMICH_VERSION: release
+  DB_HOSTNAME: aac-immich-db
+  REDIS_HOSTNAME: aac-immich-redis
+  DB_DATABASE_NAME: immich
+  DB_USERNAME: postgres
+  DB_PORT: '5432'
+  VIPS_NOVECTOR: '1'
+  IMMICH_IGNORE_MOUNT_CHECK_ERRORS: 'true'
+  MACHINE_LEARNING_WORKERS: '2'
+  POSTGRES_DB: immich
+  POSTGRES_USER: postgres
+  POSTGRES_INITDB_ARGS: --data-checksums
